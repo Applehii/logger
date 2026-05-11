@@ -32,9 +32,10 @@ export class LogTailer {
         follow: true,
         fromBeginning: false,
         flushAtEOF: true,
-        useWatchFile: true,
-        fsWatchOptions: { interval: 1000 }, // Tăng interval lên 1s cho Windows đỡ tốn CPU
-        logger: console, // Thêm logger để debug nếu cần
+        useWatchFile: false, // Tắt watchFile để dùng poll
+        fsWatchOptions: { interval: 1000 },
+        poll: true, // Bật polling thủ công - quan trọng cho Windows
+        logger: console,
       });
 
       this.tail.on('line', (line) => {
