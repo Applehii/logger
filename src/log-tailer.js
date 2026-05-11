@@ -32,8 +32,9 @@ export class LogTailer {
         follow: true,
         fromBeginning: false,
         flushAtEOF: true,
-        useWatchFile: true,  // More reliable on macOS
-        fsWatchOptions: { interval: 500 },
+        useWatchFile: true,
+        fsWatchOptions: { interval: 1000 }, // Tăng interval lên 1s cho Windows đỡ tốn CPU
+        logger: console, // Thêm logger để debug nếu cần
       });
 
       this.tail.on('line', (line) => {
