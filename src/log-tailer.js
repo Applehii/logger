@@ -32,13 +32,14 @@ export class LogTailer {
         follow: true,
         fromBeginning: false,
         flushAtEOF: true,
-        useWatchFile: false, // Tắt watchFile để dùng poll
-        fsWatchOptions: { interval: 1000 },
-        poll: true, // Bật polling thủ công - quan trọng cho Windows
+        useWatchFile: true, // Bắt buộc dùng true trên Windows để polling
+        fsWatchOptions: { interval: 500 },
         logger: console,
       });
 
       this.tail.on('line', (line) => {
+        // Log debug ra terminal để biết là có nhận được data hay không
+        console.log(`[tailer:${this.source}] New line received (${line.length} chars)`);
         this.aggregator.push(line);
       });
 

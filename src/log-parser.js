@@ -118,16 +118,18 @@ export class LogAggregator {
     this.onEntry = onEntry;
     this.source = source;
     this.current = null;
+    this.flushTimer = null;
   }
 
   push(line) {
+    // Clear existing timer
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+
     if (this.source === 'request') {
       const parsed = parseRequestLine(line);
       if (parsed) {
         this.onEntry(parsed);
       } else {
-        // Gửi dòng log này về nhưng đánh dấu là hidden để Metrics vẫn tính được
-        // mà không hiện lên màn hình Logs
         this.onEntry({ raw: line, hidden: true });
       }
       return;
@@ -135,23 +137,27 @@ export class LogAggregator {
 
     const parsed = parseLogLine(line);
     if (parsed) {
-      // New entry starts → flush previous
       this.flush();
       this.current = parsed;
     } else if (this.current && isStackTraceLine(line)) {
-      // Stack trace line → append to current
       if (!this.current.stackTrace) this.current.stackTrace = [];
       this.current.stackTrace.push(line);
     } else if (this.current) {
-      // Continuation of message (multi-line log message)
       this.current.message += '\n' + line;
     }
+
+    // Set a timer to flush if no more lines come in (e.g. end of a multi-line log)
+    this.flushTimer = setTimeout(() => this.flush(), 200);
   }
 
   flush() {
     if (this.current) {
       this.onEntry(this.current);
       this.current = null;
+    }
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
     }
   }
 }
