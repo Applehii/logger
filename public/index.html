@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AEM Log Monitor</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+    --fg: #c9d1d9; --fg-dim: #8b949e; --fg-bright: #f0f6fc;
+    --red: #f85149; --red-bg: #2d1113;
+    --yellow: #d29922; --yellow-bg: #2d2407;
+    --blue: #58a6ff; --green: #3fb950; --purple: #bc8cff;
+    --border: #30363d;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-mono); font-size: 13px; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .header h1 { font-size: 14px; color: var(--fg-bright); font-weight: 600; }
+  .header .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-dim); }
+  .header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .header .dot.off { background: var(--red); }
+
+  /* Filters */
+  .filters { padding: 8px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
+  .filter-group { display: flex; align-items: center; gap: 4px; }
+  .filter-group label { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; margin-right: 4px; }
+  .filter-btn { padding: 2px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg-dim); border-radius: 4px; cursor: pointer; font-size: 11px; font-family: var(--font-mono); }
+  .filter-btn.active { border-color: var(--blue); color: var(--blue); background: rgba(88,166,255,0.1); }
+  .filter-btn.error.active { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+  .filter-btn.warn.active { border-color: var(--yellow); color: var(--yellow); background: var(--yellow-bg); }
+  .filter-input { background: var(--bg); border: 1px solid var(--border); color: var(--fg); padding: 3px 8px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono); width: 180px; }
+  .filter-input:focus { outline: none; border-color: var(--blue); }
+  .filter-input::placeholder { color: var(--fg-dim); }
+
+  /* Log container */
+  .log-container { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0; }
+  .log-container::-webkit-scrollbar { width: 8px; }
+  .log-container::-webkit-scrollbar-track { background: var(--bg); }
+  .log-container::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
+
+  /* Log entry */
+  .log-entry { padding: 4px 16px; border-bottom: 1px solid rgba(48,54,61,0.3); font-size: 12px; line-height: 1.5; display: flex; gap: 8px; cursor: pointer; }
+  .log-entry:hover { background: var(--bg2); }
+  .log-entry.selected { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); }
+  .log-entry.level-ERROR { background: rgba(248,81,73,0.05); }
+  .log-entry.level-ERROR:hover { background: rgba(248,81,73,0.1); }
+  .log-entry.level-WARN { background: rgba(210,153,34,0.05); }
+  .log-entry.level-DEBUG { opacity: 0.6; }
+
+  .log-time { color: var(--fg-dim); white-space: nowrap; flex-shrink: 0; width: 85px; }
+  .log-level { font-weight: 700; flex-shrink: 0; width: 45px; text-align: center; }
+  .log-level.ERROR { color: var(--red); }
+  .log-level.WARN { color: var(--yellow); }
+  .log-level.INFO { color: var(--blue); }
+  .log-level.DEBUG { color: var(--fg-dim); }
+  .log-module { color: var(--purple); flex-shrink: 0; width: 80px; font-size: 10px; padding: 1px 4px; background: rgba(188,140,255,0.1); border-radius: 3px; text-align: center; white-space: nowrap; overflow: hidden; }
+  .log-class { color: var(--fg-dim); flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-msg { color: var(--fg); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log-msg .highlight { background: rgba(210,153,34,0.3); padding: 0 2px; border-radius: 2px; }
+
+  /* Stack trace */
+  .stack-trace { display: none; padding: 8px 16px 8px 100px; background: var(--bg2); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.6; max-height: 300px; overflow-y: auto; }
+  .stack-trace.open { display: block; }
+  .stack-trace .st-caused { color: var(--yellow); font-weight: 600; }
+  .stack-trace .st-at { color: var(--fg-dim); }
+  .stack-trace .st-at .own-code { color: var(--blue); font-weight: 600; }
+
+  /* Actions bar */
+  .actions { display: none; padding: 4px 16px 4px 100px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+  .actions.open { display: flex; gap: 8px; }
+  .actions button { padding: 3px 10px; border: 1px solid var(--border); background: var(--bg3); color: var(--fg); border-radius: 4px; cursor: pointer; font-size: 11px; font-family: var(--font-mono); }
+  .actions button:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* Footer */
+  .footer { padding: 6px 16px; background: var(--bg2); border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); display: flex; gap: 16px; align-items: center; flex-shrink: 0; }
+  .footer .stat { display: flex; align-items: center; gap: 4px; }
+  .footer .stat .val { color: var(--fg-bright); font-weight: 600; }
+  .footer .auto-scroll { margin-left: auto; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .footer .auto-scroll input { cursor: pointer; }
+
+  /* Empty state */
+  .empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg-dim); flex-direction: column; gap: 8px; }
+  .empty .icon { font-size: 48px; opacity: 0.3; }
+
+  /* Main layout with AI panel */
+  .main-area { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+  .main-area .log-container { flex: 1; overflow-y: auto; }
+
+  /* AI Panel */
+  .ai-panel { width: 0; overflow: hidden; transition: width 0.3s; background: var(--bg2); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .ai-panel.open { width: 420px; min-width: 420px; }
+  .ai-panel-header { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .ai-panel-header h2 { font-size: 13px; color: var(--fg-bright); }
+  .ai-panel-close { background: none; border: none; color: var(--fg-dim); cursor: pointer; font-size: 16px; padding: 2px 6px; }
+  .ai-panel-close:hover { color: var(--fg-bright); }
+  .ai-panel-content { flex: 1; overflow-y: auto; padding: 14px; font-size: 12px; line-height: 1.7; }
+  .ai-panel-content::-webkit-scrollbar { width: 6px; }
+  .ai-panel-content::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+
+  /* AI content formatting */
+  .ai-loading { display: flex; align-items: center; gap: 8px; color: var(--fg-dim); padding: 20px; }
+  .ai-loading .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .ai-error { color: var(--red); padding: 12px; background: var(--red-bg); border-radius: 6px; }
+  .ai-result { color: var(--fg); }
+  .ai-result h3 { color: var(--blue); font-size: 12px; margin: 12px 0 4px 0; }
+  .ai-result h3:first-child { margin-top: 0; }
+  .ai-result p { margin: 4px 0; }
+  .ai-result code { background: var(--bg3); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .ai-result pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; font-size: 11px; line-height: 1.5; border: 1px solid var(--border); }
+  .ai-result ul, .ai-result ol { padding-left: 18px; margin: 4px 0; }
+  .ai-result li { margin: 2px 0; }
+  .ai-result strong { color: var(--fg-bright); }
+  .ai-result em { color: var(--yellow); font-style: normal; }
+
+  .ai-source { margin-top: 12px; padding: 10px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); }
+  .ai-source-header { font-size: 11px; color: var(--blue); margin-bottom: 6px; word-break: break-all; }
+  .ai-source pre { margin: 0; border: none; padding: 0; background: none; }
+
+  .ai-tokens { margin-top: 12px; font-size: 10px; color: var(--fg-dim); text-align: right; }
+
+  /* Tabs */
+  .tabs { display: flex; background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 16px; flex-shrink: 0; }
+  .tab { padding: 8px 16px; font-size: 12px; color: var(--fg-dim); cursor: pointer; border-bottom: 2px solid transparent; font-family: var(--font-mono); }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tab-content { display: none; flex: 1; overflow: hidden; min-height: 0; }
+  .tab-content.active { display: flex; flex-direction: column; }
+
+  /* Metrics */
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 16px; }
+  .metric-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .metric-card .label { font-size: 10px; color: var(--fg-dim); text-transform: uppercase; }
+  .metric-card .value { font-size: 24px; color: var(--fg-bright); font-weight: 700; margin: 4px 0; }
+  .metric-card .unit { font-size: 11px; color: var(--fg-dim); }
+
+  .metrics-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .metrics-table th { text-align: left; padding: 6px 12px; color: var(--fg-dim); border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  .metrics-table td { padding: 6px 12px; border-bottom: 1px solid rgba(48,54,61,0.3); }
+  .metrics-table tr:hover { background: var(--bg2); }
+  .metrics-section { padding: 16px; }
+  .metrics-section h3 { font-size: 13px; color: var(--fg-bright); margin-bottom: 10px; }
+
+  /* Bookmarks */
+  .bookmarks-list { padding: 8px; overflow-y: auto; flex: 1; }
+  .bookmark-item { padding: 10px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; font-size: 12px; cursor: pointer; }
+  .bookmark-item:hover { border-color: var(--blue); }
+  .bookmark-item .bm-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .bookmark-item .bm-level { font-weight: 700; }
+  .bookmark-item .bm-level.ERROR { color: var(--red); }
+  .bookmark-item .bm-level.WARN { color: var(--yellow); }
+  .bookmark-item .bm-time { color: var(--fg-dim); font-size: 10px; }
+  .bookmark-item .bm-msg { color: var(--fg); }
+  .bookmark-item .bm-module { color: var(--purple); font-size: 10px; }
+  .bookmark-item .bm-actions { margin-top: 6px; display: flex; gap: 6px; }
+  .bookmark-item .bm-actions button { padding: 2px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg-dim); border-radius: 3px; cursor: pointer; font-size: 10px; font-family: var(--font-mono); }
+  .bookmark-item .bm-actions button:hover { color: var(--red); border-color: var(--red); }
+  .bookmarks-empty { padding: 40px; text-align: center; color: var(--fg-dim); }
+
+  /* Debug */
+  .debug-container { padding: 16px; overflow-y: auto; flex: 1; }
+  .debug-form { display: flex; gap: 8px; margin-bottom: 16px; }
+  .debug-form input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--fg); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: var(--font-mono); }
+  .debug-form input:focus { outline: none; border-color: var(--blue); }
+  .debug-form button { padding: 8px 20px; background: var(--blue); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: var(--font-mono); font-weight: 600; }
+  .debug-form button:hover { opacity: 0.9; }
+  .debug-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .debug-result { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .debug-screenshot { width: 100%; border-bottom: 1px solid var(--border); }
+  .debug-screenshot img { width: 100%; display: block; }
+  .debug-info { padding: 12px; }
+  .debug-info h4 { font-size: 12px; color: var(--fg-bright); margin-bottom: 6px; }
+  .debug-info pre { background: var(--bg); padding: 8px; border-radius: 4px; font-size: 11px; overflow-x: auto; max-height: 200px; overflow-y: auto; }
+  .debug-status { padding: 12px; background: var(--bg2); border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+  .debug-status.available { border-left: 3px solid var(--green); }
+  .debug-status.unavailable { border-left: 3px solid var(--red); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>AEM Log Monitor</h1>
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</div>
+
+<div class="filters">
+  <div class="filter-group">
+    <label>Level</label>
+    <button class="filter-btn error active" data-level="ERROR">ERROR</button>
+    <button class="filter-btn warn active" data-level="WARN">WARN</button>
+    <button class="filter-btn active" data-level="INFO">INFO</button>
+    <button class="filter-btn" data-level="DEBUG">DEBUG</button>
+  </div>
+  <div class="filter-group">
+    <label>Module</label>
+    <button class="filter-btn active" data-module="core">core</button>
+    <button class="filter-btn active" data-module="ui.apps">ui.apps</button>
+    <button class="filter-btn active" data-module="ui.frontend">ui.frontend</button>
+    <button class="filter-btn active" data-module="ui.config">ui.config</button>
+    <button class="filter-btn active" data-module="aem-internal">aem</button>
+  </div>
+  <div class="filter-group">
+    <input class="filter-input" type="text" id="keywordFilter" placeholder="Filter keyword...">
+  </div>
+  <div class="filter-group">
+    <label>
+      <input type="checkbox" id="noiseFilter" checked> Noise filter
+    </label>
+  </div>
+  <div class="filter-group" style="margin-left:auto">
+    <button class="filter-btn" id="clearBtn">Clear</button>
+    <button class="filter-btn" id="pauseBtn">Pause</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="logs">Logs</div>
+  <div class="tab" data-tab="metrics">Metrics</div>
+  <div class="tab" data-tab="bookmarks">Bookmarks</div>
+  <div class="tab" data-tab="settings">Settings</div>
+  </div>
+  </div>
+<!-- Tab: Logs -->
+<div class="tab-content active" id="tab-logs">
+  <div class="main-area">
+    <div class="log-container" id="logContainer">
+      <div class="empty" id="emptyState">
+        <div class="icon">📋</div>
+        <div>Waiting for log entries...</div>
+        <div style="font-size:11px">Make sure AEM is running on localhost:4502</div>
+      </div>
+    </div>
+    <div class="ai-panel" id="aiPanel">
+      <div class="ai-panel-header">
+        <h2>AI Analysis</h2>
+        <button class="ai-panel-close" onclick="closeAiPanel()">✕</button>
+      </div>
+      <div class="ai-panel-content" id="aiContent">
+        <div style="color:var(--fg-dim);padding:20px;text-align:center">
+          Click "Analyze" on any error to get AI-powered analysis
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tab: Metrics -->
+<div class="tab-content" id="tab-metrics" style="overflow-y:auto">
+  <div class="metrics-grid" id="metricsCards"></div>
+  <div class="metrics-section">
+    <h3>Slow Requests (&gt;1s)</h3>
+    <table class="metrics-table">
+      <thead><tr><th>Path</th><th>Method</th><th>Status</th><th>Duration</th><th>Time</th></tr></thead>
+      <tbody id="slowRequests"></tbody>
+    </table>
+  </div>
+  <div class="metrics-section">
+    <h3>Top Paths by Avg Response Time</h3>
+    <table class="metrics-table">
+      <thead><tr><th>Path</th><th>Avg (ms)</th><th>Requests</th></tr></thead>
+      <tbody id="topPaths"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab: Bookmarks -->
+<div class="tab-content" id="tab-bookmarks">
+  <div class="bookmarks-list" id="bookmarksList">
+    <div class="bookmarks-empty">No bookmarks yet. Click "Bookmark" on any log entry to save it.</div>
+  </div>
+</div>
+
+<!-- Tab: Settings -->
+<div class="tab-content" id="tab-settings">
+  <div class="settings-container" style="max-width:600px;margin:20px auto;padding:24px;background:rgba(255,255,255,0.03);border-radius:12px;border:1px solid var(--border)">
+    <h2 style="margin-bottom:20px;font-size:18px">Application Settings</h2>
+    
+    <div class="form-group" style="margin-bottom:16px">
+      <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--fg-dim)">AEM Host</label>
+      <input type="text" id="setAemHost" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px">
+    </div>
+
+    <div class="form-group" style="margin-bottom:16px">
+      <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--fg-dim)">Log Directory Path</label>
+      <input type="text" id="setLogDir" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px">
+    </div>
+
+    <div class="form-group" style="margin-bottom:16px">
+      <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--fg-dim)">Log Files (name:filename, comma separated)</label>
+      <input type="text" id="setLogFiles" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px">
+      <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">Example: error:error.log,request:request.log,project:my-project.log</div>
+    </div>
+
+    <button id="saveSettingsBtn" onclick="saveSettings()" style="margin-top:10px;padding:10px 24px;background:var(--blue);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:700">Save & Restart Watchers</button>
+    <div id="settingsMsg" style="margin-top:12px;font-size:12px"></div>
+  </div>
+</div>
+
+</div>
+
+<div class="footer">
+  <div class="stat">Lines: <span class="val" id="statTotal">0</span></div>
+  <div class="stat">Errors: <span class="val" style="color:var(--red)" id="statErrors">0</span></div>
+  <div class="stat">Warnings: <span class="val" style="color:var(--yellow)" id="statWarnings">0</span></div>
+  <div class="stat">Showing: <span class="val" id="statShowing">0</span></div>
+  <label class="auto-scroll">
+    <input type="checkbox" id="autoScroll" checked> Auto-scroll
+  </label>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────
+const entries = [];
+let selectedId = null;
+let paused = false;
+let totalErrors = 0;
+let totalWarnings = 0;
+
+// ── Filter state ─────────────────────────────────────────────
+const activeLevels = new Set(['ERROR', 'WARN', 'INFO']);
+const activeModules = new Set(['core', 'ui.apps', 'ui.frontend', 'ui.config', 'aem-internal']);
+let keyword = '';
+
+// ── DOM refs ─────────────────────────────────────────────────
+const container = document.getElementById('logContainer');
+const emptyState = document.getElementById('emptyState');
+
+// ── WebSocket ────────────────────────────────────────────────
+let ws;
+function connect() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}`);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').className = 'dot';
+    document.getElementById('statusText').textContent = 'Connected';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').className = 'dot off';
+    document.getElementById('statusText').textContent = 'Disconnected — reconnecting...';
+    setTimeout(connect, 3000);
+  };
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'log') {
+      addEntry(msg.entry);
+    } else if (msg.type === 'status') {
+      document.getElementById('statusText').textContent = `Connected — ${msg.aemHost}`;
+    }
+  };
+}
+
+// ── Add log entry ────────────────────────────────────────────
+function addEntry(entry) {
+  if (paused) return;
+
+  entries.push(entry);
+  if (entry.level === 'ERROR') totalErrors++;
+  if (entry.level === 'WARN') totalWarnings++;
+
+  // Keep max entries in memory
+  if (entries.length > 10000) entries.splice(0, entries.length - 8000);
+
+  if (matchesFilter(entry)) {
+    renderEntry(entry);
+  }
+  updateStats();
+}
+
+function matchesFilter(entry) {
+  if (!activeLevels.has(entry.level)) return false;
+  if (!activeModules.has(entry.module)) return false;
+  if (keyword && !(entry.message + ' ' + entry.className).toLowerCase().includes(keyword)) return false;
+  if (document.getElementById('noiseFilter').checked && isNoise(entry)) return false;
+  return true;
+}
+
+const NOISE_PATTERNS = [
+  /SynchronizedClocksHealthCheck/, /ServiceEvent (UN)?REGISTERING/,
+  /livefyre/i, /PeriodicAutoTaggingJob/, /BackupCleaner/,
+  /AccessTokenCleanupTask.*Removed 0/, /ScheduleRepeatTranslationProject/,
+  /SegmentNotFoundExceptionListener/, /LoginAdminWhitelist.*deprecated/,
+  /ScheduledReporter/, /Exception was suppressed/,
+  /MDA\w*ReporterReport/, /metrics.*RRD4J/i, /com\.codahale\.metrics/,
+];
+
+function isNoise(entry) {
+  const text = entry.raw || entry.message || '';
+  return NOISE_PATTERNS.some(p => p.test(text));
+}
+
+// ── Render ───────────────────────────────────────────────────
+function renderEntry(entry) {
+  if (emptyState.parentNode) emptyState.remove();
+
+  const div = document.createElement('div');
+  div.className = `log-entry level-${entry.level}`;
+  div.dataset.id = entry.id;
+
+  // Time — show only HH:MM:SS
+  const time = (entry.timestamp || '').split(' ').pop() || '';
+  const shortTime = time.substring(0, 8);
+
+  // Message — highlight keyword
+  let msgHtml = escapeHtml(entry.message || '').substring(0, 200);
+  if (keyword) {
+    const re = new RegExp(`(${escapeRegex(keyword)})`, 'gi');
+    msgHtml = msgHtml.replace(re, '<span class="highlight">$1</span>');
+  }
+
+  // Short class name
+  const classParts = (entry.className || '').split('.');
+  const shortClass = classParts.length > 1 ? classParts[classParts.length - 1] : entry.className;
+
+  div.innerHTML = `
+    <span class="log-time">${shortTime}</span>
+    <span class="log-level ${entry.level}">${entry.level}</span>
+    <span class="log-module">${entry.module}</span>
+    <span class="log-class" title="${escapeHtml(entry.className)}">${escapeHtml(shortClass)}</span>
+    <span class="log-msg">${msgHtml}</span>
+  `;
+
+  div.onclick = () => toggleExpand(entry, div);
+  container.appendChild(div);
+
+  // Stack trace (hidden by default)
+  if (entry.stackTrace && entry.stackTrace.length > 0) {
+    const stDiv = document.createElement('div');
+    stDiv.className = 'stack-trace';
+    stDiv.id = `st-${entry.id}`;
+    stDiv.innerHTML = formatStackTrace(entry.stackTrace, entry);
+    container.appendChild(stDiv);
+  }
+
+  // Actions bar (Always create for all entries to allow expansion/analysis)
+  const actDiv = document.createElement('div');
+  actDiv.className = 'actions';
+  actDiv.id = `act-${entry.id}`;
+  actDiv.innerHTML = `
+    <button onclick="analyzeEntry(${entry.id})">Analyze with AI</button>
+    <button onclick="copyToCopilot(${entry.id})">Copy for Copilot</button>
+    <button onclick="bookmarkEntry(${entry.id})">Bookmark</button>
+    <button onclick="copyEntry(${entry.id})">Copy Log</button>
+  `;
+  container.appendChild(actDiv);
+
+  // Auto-scroll
+  if (document.getElementById('autoScroll').checked) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function toggleExpand(entry, div) {
+  const wasSelected = div.classList.contains('selected');
+
+  // Deselect all
+  document.querySelectorAll('.log-entry.selected').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.stack-trace.open').forEach(el => el.classList.remove('open'));
+  document.querySelectorAll('.actions.open').forEach(el => el.classList.remove('open'));
+
+  if (!wasSelected) {
+    div.classList.add('selected');
+    const st = document.getElementById(`st-${entry.id}`);
+    const act = document.getElementById(`act-${entry.id}`);
+    if (st) st.classList.add('open');
+    if (act) act.classList.add('open');
+    selectedId = entry.id;
+  } else {
+    selectedId = null;
+  }
+}
+
+function formatStackTrace(lines, entry) {
+  return lines.map(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('Caused by:')) {
+      return `<span class="st-caused">${escapeHtml(line)}</span>`;
+    }
+    if (trimmed.startsWith('at ') || trimmed.startsWith('... ')) {
+      // Highlight own code
+      if (/com\.aem\.vue/.test(line)) {
+        return `<span class="st-at"><span class="own-code">${escapeHtml(line)}</span></span>`;
+      }
+      return `<span class="st-at">${escapeHtml(line)}</span>`;
+    }
+    return escapeHtml(line);
+  }).join('\n');
+}
+
+function updateStats() {
+  const showing = container.querySelectorAll('.log-entry').length;
+  document.getElementById('statTotal').textContent = entries.length;
+  document.getElementById('statErrors').textContent = totalErrors;
+  document.getElementById('statWarnings').textContent = totalWarnings;
+  document.getElementById('statShowing').textContent = showing;
+}
+
+// ── AI Panel ─────────────────────────────────────────────────
+const aiPanel = document.getElementById('aiPanel');
+const aiContent = document.getElementById('aiContent');
+
+function openAiPanel() { aiPanel.classList.add('open'); }
+window.closeAiPanel = () => { aiPanel.classList.remove('open'); };
+
+window.analyzeEntry = async (id) => {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+
+  openAiPanel();
+  aiContent.innerHTML = `
+    <div class="ai-loading">
+      <div class="spinner"></div>
+      <span>Analyzing with DeepSeek AI...</span>
+    </div>
+    <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:6px;font-size:11px;color:var(--fg-dim)">
+      <div><strong style="color:var(--fg)">${escapeHtml(entry.className)}</strong></div>
+      <div style="margin-top:4px">${escapeHtml((entry.message || '').substring(0, 150))}</div>
+    </div>
+  `;
+
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entry }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      aiContent.innerHTML = `<div class="ai-error">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+
+    let html = `<div class="ai-result">${markdownToHtml(data.analysis)}</div>`;
+
+    if (data.sourceContext) {
+      html += `
+        <div class="ai-source">
+          <div class="ai-source-header">${escapeHtml(data.sourceContext.filePath)}${data.sourceContext.lineNumber ? ':' + data.sourceContext.lineNumber : ''}</div>
+        </div>
+      `;
+    }
+
+    if (data.tokens) {
+      html += `<div class="ai-tokens">Tokens: ${data.tokens.input} in / ${data.tokens.output} out</div>`;
+    }
+
+    aiContent.innerHTML = html;
+  } catch (err) {
+    aiContent.innerHTML = `<div class="ai-error">Request failed: ${escapeHtml(err.message)}</div>`;
+  }
+};
+
+window.copyToCopilot = async (id) => {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+
+  const btn = document.querySelector(`#act-${id} button:nth-child(2)`);
+  const originalText = btn.textContent;
+  btn.textContent = 'Generating...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entry }),
+    });
+    const data = await res.json();
+
+    if (data.prompt) {
+      await navigator.clipboard.writeText(data.prompt);
+      btn.textContent = 'Copied!';
+      btn.style.color = 'var(--green)';
+      btn.style.borderColor = 'var(--green)';
+    } else {
+      throw new Error('Failed to generate prompt');
+    }
+  } catch (err) {
+    console.error('Copy to Copilot failed', err);
+    btn.textContent = 'Error!';
+    btn.style.color = 'var(--red)';
+  } finally {
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.style.color = '';
+      btn.style.borderColor = '';
+      btn.disabled = false;
+    }, 2000);
+  }
+};
+
+window.bookmarkEntry = (id) => {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+  const bookmarks = JSON.parse(localStorage.getItem('aem-bookmarks') || '[]');
+  bookmarks.push({ ...entry, bookmarkedAt: new Date().toISOString() });
+  localStorage.setItem('aem-bookmarks', JSON.stringify(bookmarks));
+  const btn = document.querySelector(`#act-${id} button:nth-child(2)`);
+  if (btn) { btn.textContent = 'Saved!'; btn.style.color = 'var(--green)'; }
+};
+
+window.copyEntry = (id) => {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+  const text = [entry.raw, ...(entry.stackTrace || [])].join('\n');
+  navigator.clipboard.writeText(text);
+  const btn = document.querySelector(`#act-${id} button:nth-child(3)`);
+  if (btn) { btn.textContent = 'Copied!'; btn.style.color = 'var(--green)'; }
+};
+
+function markdownToHtml(md) {
+  if (!md) return '';
+  return md
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre>$2</pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^# (.+)$/gm, '<h3>$1</h3>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+}
+
+// ── Filter handlers ──────────────────────────────────────────
+document.querySelectorAll('[data-level]').forEach(btn => {
+  btn.onclick = () => {
+    const level = btn.dataset.level;
+    btn.classList.toggle('active');
+    if (activeLevels.has(level)) activeLevels.delete(level);
+    else activeLevels.add(level);
+    rerender();
+  };
+});
+
+document.querySelectorAll('[data-module]').forEach(btn => {
+  btn.onclick = () => {
+    const mod = btn.dataset.module;
+    btn.classList.toggle('active');
+    if (activeModules.has(mod)) activeModules.delete(mod);
+    else activeModules.add(mod);
+    rerender();
+  };
+});
+
+document.getElementById('keywordFilter').oninput = (e) => {
+  keyword = e.target.value.toLowerCase();
+  rerender();
+};
+
+document.getElementById('noiseFilter').onchange = () => rerender();
+
+document.getElementById('clearBtn').onclick = () => {
+  entries.length = 0;
+  totalErrors = 0;
+  totalWarnings = 0;
+  container.innerHTML = '';
+  updateStats();
+};
+
+document.getElementById('pauseBtn').onclick = () => {
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+  document.getElementById('pauseBtn').classList.toggle('active', paused);
+};
+
+function rerender() {
+  container.innerHTML = '';
+  let count = 0;
+  for (const entry of entries) {
+    if (matchesFilter(entry)) {
+      renderEntry(entry);
+      count++;
+    }
+  }
+  if (count === 0) {
+    container.appendChild(emptyState);
+  }
+  updateStats();
+}
+
+// ── Utilities ────────────────────────────────────────────────
+function escapeHtml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ── Keyboard shortcuts ──────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+    document.querySelectorAll('.stack-trace.open').forEach(el => el.classList.remove('open'));
+    document.querySelectorAll('.actions.open').forEach(el => el.classList.remove('open'));
+  }
+  if (e.key === '/' && !e.target.matches('input')) {
+    e.preventDefault();
+    document.getElementById('keywordFilter').focus();
+  }
+});
+
+// ── Tabs ─────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'metrics') loadMetrics();
+    if (tab.dataset.tab === 'bookmarks') loadBookmarks();
+    if (tab.dataset.tab === 'settings') loadSettings();
+  };
+});
+
+// ── Settings ─────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    document.getElementById('setAemHost').value = data.aemHost;
+    document.getElementById('setLogDir').value = data.aemLogDir;
+    document.getElementById('setLogFiles').value = data.logFiles;
+  } catch (err) {
+    console.error('Failed to load settings', err);
+  }
+}
+
+window.saveSettings = async () => {
+  const btn = document.getElementById('saveSettingsBtn');
+  const msg = document.getElementById('settingsMsg');
+  
+  const payload = {
+    aemHost: document.getElementById('setAemHost').value,
+    aemLogDir: document.getElementById('setLogDir').value,
+    logFiles: document.getElementById('setLogFiles').value
+  };
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  msg.textContent = '';
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    
+    if (data.success) {
+      msg.style.color = 'var(--green)';
+      msg.textContent = 'Settings saved! Watchers restarted. Reconnecting in 2s...';
+      setTimeout(() => {
+        location.reload(); // Reload to apply all changes and reconnect
+      }, 2000);
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch (err) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Error: ' + err.message;
+    btn.disabled = false;
+    btn.textContent = 'Save & Restart Watchers';
+  }
+};
+
+// ── Metrics ──────────────────────────────────────────────────
+async function loadMetrics() {
+  try {
+    const res = await fetch('/api/metrics');
+    const data = await res.json();
+    document.getElementById('metricsCards').innerHTML = `
+      <div class="metric-card"><div class="label">Total Requests</div><div class="value">${data.count}</div></div>
+      <div class="metric-card"><div class="label">Avg Response</div><div class="value">${data.avg}<span class="unit">ms</span></div></div>
+      <div class="metric-card"><div class="label">P50</div><div class="value">${data.p50}<span class="unit">ms</span></div></div>
+      <div class="metric-card"><div class="label">P95</div><div class="value">${data.p95}<span class="unit">ms</span></div></div>
+      <div class="metric-card"><div class="label">P99</div><div class="value">${data.p99}<span class="unit">ms</span></div></div>
+      ${Object.entries(data.statusBreakdown||{}).map(([k,v])=>`<div class="metric-card"><div class="label">${k}</div><div class="value">${v}</div></div>`).join('')}
+    `;
+    document.getElementById('slowRequests').innerHTML = (data.slowRequests||[]).map(r=>`
+      <tr><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.path)}</td>
+      <td>${r.method}</td><td style="color:${r.status>=400?'var(--red)':'var(--fg)'}">${r.status}</td>
+      <td style="color:var(--yellow);font-weight:700">${r.duration}ms</td><td style="color:var(--fg-dim)">${r.timestamp||''}</td></tr>
+    `).join('')||'<tr><td colspan="5" style="color:var(--fg-dim);text-align:center;padding:20px">No slow requests</td></tr>';
+    document.getElementById('topPaths').innerHTML = (data.topPaths||[]).map(p=>`
+      <tr><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.path)}</td>
+      <td style="font-weight:700">${p.avg}ms</td><td>${p.count}</td></tr>
+    `).join('')||'<tr><td colspan="3" style="color:var(--fg-dim);text-align:center;padding:20px">No data yet</td></tr>';
+  } catch(err) { document.getElementById('metricsCards').innerHTML=`<div style="color:var(--red);padding:20px">${err.message}</div>`; }
+}
+
+// ── Bookmarks ────────────────────────────────────────────────
+async function loadBookmarks() {
+  try {
+    const res = await fetch('/api/bookmarks');
+    const bookmarks = await res.json();
+    const list = document.getElementById('bookmarksList');
+    if (bookmarks.length===0) { list.innerHTML='<div class="bookmarks-empty">No bookmarks yet. Click "Bookmark" on any log entry.</div>'; return; }
+    list.innerHTML = bookmarks.map(bm=>`
+      <div class="bookmark-item">
+        <div class="bm-header"><span><span class="bm-level ${bm.level}">${bm.level}</span> <span class="bm-module">${bm.module}</span></span><span class="bm-time">${bm.created_at}</span></div>
+        <div class="bm-msg">${escapeHtml((bm.message||'').substring(0,200))}</div>
+        <div style="margin-top:4px;font-size:11px;color:var(--fg-dim)">${escapeHtml(bm.className)}</div>
+        <div class="bm-actions"><button onclick="deleteBookmark(${bm.id})">Delete</button></div>
+      </div>
+    `).join('');
+  } catch(err) { document.getElementById('bookmarksList').innerHTML=`<div style="color:var(--red);padding:20px">${err.message}</div>`; }
+}
+
+window.bookmarkEntry = async (id) => {
+  const entry = entries.find(e=>e.id===id);
+  if(!entry) return;
+  try {
+    await fetch('/api/bookmarks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry})});
+    const btn=document.querySelector(`#act-${id} button:nth-child(2)`);
+    if(btn){btn.textContent='Saved!';btn.style.color='var(--green)';}
+  } catch{}
+};
+
+window.deleteBookmark = async (id) => {
+  await fetch(`/api/bookmarks/${id}`,{method:'DELETE'});
+  loadBookmarks();
+};
+
+// ── Start ────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>
